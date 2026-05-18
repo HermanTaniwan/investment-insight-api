@@ -51,9 +51,13 @@ export default async function handler(req, res) {
         },
 
         Themes: {
-          multi_select: themes.map((theme) => ({
-            name: theme,
-          })),
+          rich_text: [
+            {
+              text: {
+                content: Array.isArray(themes) ? themes.join(", ") : themes,
+              },
+            },
+          ],
         },
 
         "Source Type": {
