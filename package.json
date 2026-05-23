@@ -1,7 +1,10 @@
 {
+  "name": "investment-insight-api",
+  "version": "1.0.0",
   "type": "module",
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "formidable": "^3.5.2",
-    "@notionhq/client": "^2.2.14"
+    "pdfjs-dist": "^4.10.38"
   }
 }
