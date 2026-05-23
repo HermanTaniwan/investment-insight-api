@@ -12,10 +12,10 @@ export const config = {
 const NOTION_VERSION = "2022-06-28";
 
 const KEYWORD_GROUPS = {
-  thesis: ["investment thesis", "thesis", "catalyst", "upside"],
+  thesis: ["investment thesis", "thesis", "catalyst", "upside", "buy", "hold", "sell"],
   business: ["route", "fleet", "vessel", "business model", "operations", "hormuz"],
   market: ["aframax", "charter", "freight", "spot exposure", "spot earnings", "market"],
-  lng: ["lng", "pln", "gas demand", "distribution network", "gas", "fsru"],
+  lng: ["lng", "pln", "gas demand", "distribution network", "fsru", "gas"],
   revenue: ["revenue", "ebitda", "net profit", "margin", "cost breakdown", "revenue breakdown"],
   valuation: ["valuation", "peer comparison", "target price", "ev/ebitda", "p/e", "tp"],
   forecast: ["income statement", "balance sheet", "cash flow", "key ratios", "forecast"],
@@ -43,7 +43,7 @@ function cleanText(text = "") {
 
 function parseForm(req) {
   const form = formidable({
-    maxFileSize: 30 * 1024 * 1024,
+    maxFileSize: 35 * 1024 * 1024,
     multiples: false,
   });
 
@@ -83,29 +83,27 @@ class NodeCanvasFactory {
 function scorePageText(pageText) {
   const text = pageText.toLowerCase();
   let score = 0;
-  let matchedGroups = [];
+  const matchedGroups = [];
 
   for (const [group, keywords] of Object.entries(KEYWORD_GROUPS)) {
     let localScore = 0;
+
     for (const kw of keywords) {
       if (text.includes(kw)) {
         localScore += 2;
       }
     }
+
     if (localScore > 0) {
       matchedGroups.push(group);
       score += localScore;
     }
   }
 
-  // boost pages with Figures/Tables
   if (/figure\s+\d+/i.test(pageText)) score += 2;
   if (/table\s+\d+/i.test(pageText)) score += 2;
 
-  return {
-    score,
-    matchedGroups,
-  };
+  return { score, matchedGroups };
 }
 
 function inferDocumentType(fileName, firstPageText) {
@@ -113,6 +111,7 @@ function inferDocumentType(fileName, firstPageText) {
 
   if (hay.includes("initiation")) return "Initiation Report";
   if (hay.includes("pubex")) return "Pubex";
+  if (hay.includes("public expose")) return "Pubex";
   if (hay.includes("annual report")) return "Annual Report";
   if (hay.includes("quarterly")) return "Quarterly Report";
   if (hay.includes("presentation")) return "Presentation";
@@ -122,19 +121,17 @@ function inferDocumentType(fileName, firstPageText) {
 function inferTickerAndCompany(fileName, firstPageText) {
   const text = firstPageText || "";
 
-  // try Bloomberg / Reuters line first
-  const bloombergMatch = text.match(/\b([A-Z]{2,6})\.(IJ|JK)\b/);
-  const reutersMatch = text.match(/\b([A-Z]{2,6})\.(JK|IJ)\b/);
-  const ticker =
-    bloombergMatch?.[1] ||
-    reutersMatch?.[1] ||
-    fileName.toUpperCase().match(/\b([A-Z]{2,6})\b/)?.[1] ||
-    null;
+  const tickerFromMarketCode =
+    text.match(/\b([A-Z]{2,6})\.(IJ|JK)\b/)?.[1] ||
+    text.match(/\b([A-Z]{2,6})\s+(IJ|JK)\b/)?.[1];
 
-  // try company line
+  const tickerFromFile = fileName.toUpperCase().match(/\b([A-Z]{3,5})\b/)?.[1];
+
+  const ticker = tickerFromMarketCode || tickerFromFile || null;
+
   const companyMatch =
-    text.match(/PT\s+[A-Za-z0-9&.,' -]+Tbk/i) ||
-    text.match(/PT\s+[A-Za-z0-9&.,' -]+/i);
+    text.match(/PT\s+[A-Za-z0-9&.,'’() -]+Tbk/i) ||
+    text.match(/PT\s+[A-Za-z0-9&.,'’() -]+/i);
 
   const companyName = companyMatch?.[0]?.trim() || ticker || "Unknown Company";
 
@@ -145,9 +142,14 @@ function inferTickerAndCompany(fileName, firstPageText) {
 }
 
 function extractRatingAndTP(firstPageText) {
-  const ratingMatch = firstPageText.match(/\b(BUY|HOLD|SELL)\b/i);
-  const tpMatch = firstPageText.match(/Target Price\s*\(.*?\)\s*([0-9.,]+)/i);
-  const upsideMatch = firstPageText.match(/Potential Upside\s*\(%\)\s*([0-9.,]+)/i);
+  const ratingMatch = firstPageText.match(/\b(BUY|HOLD|SELL|ADD|REDUCE)\b/i);
+  const tpMatch =
+    firstPageText.match(/Target Price\s*\(.*?\)\s*([0-9.,]+)/i) ||
+    firstPageText.match(/TP\s*(?:of|:)?\s*IDR\s*([0-9.,]+)/i);
+
+  const upsideMatch =
+    firstPageText.match(/Potential Upside\s*\(%\)\s*([0-9.,]+)/i) ||
+    firstPageText.match(/([0-9.,]+)%\s*upside/i);
 
   return {
     rating: ratingMatch?.[1]?.toUpperCase() || null,
@@ -168,6 +170,7 @@ function buildPageTextAndLines(textContent, viewport) {
 
     const bucketKey = Math.round(vy / 8) * 8;
     const entry = lineBuckets.get(bucketKey) || { y: vy, parts: [] };
+
     entry.parts.push({ x: vx, str: item.str });
     lineBuckets.set(bucketKey, entry);
   }
@@ -212,7 +215,6 @@ function selectRelevantPages(pageMetas, maxVisuals = 6) {
   for (const page of sorted) {
     const group = getBestCategory(page.matchedGroups);
 
-    // prefer diverse categories first
     if (!usedGroups.has(group)) {
       selected.push(page);
       usedGroups.add(group);
@@ -221,7 +223,6 @@ function selectRelevantPages(pageMetas, maxVisuals = 6) {
     if (selected.length >= maxVisuals) break;
   }
 
-  // fill remaining slots
   if (selected.length < maxVisuals) {
     for (const page of sorted) {
       if (!selected.find((x) => x.pageNumber === page.pageNumber)) {
@@ -229,6 +230,10 @@ function selectRelevantPages(pageMetas, maxVisuals = 6) {
       }
       if (selected.length >= maxVisuals) break;
     }
+  }
+
+  if (selected.length === 0 && pageMetas.length > 0) {
+    selected.push(pageMetas[0]);
   }
 
   return selected.slice(0, maxVisuals);
@@ -256,14 +261,14 @@ function chooseThesisImpact(pageMeta) {
   const category = getBestCategory(pageMeta.matchedGroups);
 
   const map = {
-    thesis: "Directly supports the main investment thesis.",
-    business: "Supports the operational or strategic positioning thesis.",
-    market: "Supports market-upside / cyclical earnings leverage thesis.",
-    lng: "Supports growth optionality from LNG or related expansion.",
-    revenue: "Shows business mix, operating leverage, or cost exposure.",
+    thesis: "Directly supports or updates the main investment thesis.",
+    business: "Supports operational or strategic positioning.",
+    market: "Supports market upside or cyclical earnings leverage.",
+    lng: "Supports LNG-related growth optionality.",
+    revenue: "Shows revenue mix, margin, cost exposure, or operating leverage.",
     valuation: "Supports valuation or rerating argument.",
-    forecast: "Supports earnings / balance sheet / forecast assumptions.",
-    risk: "Highlights downside risks or key monitoring points.",
+    forecast: "Supports earnings, balance sheet, or forecast assumptions.",
+    risk: "Highlights downside risk or monitoring items.",
     general: "Relevant supporting context for the investment note.",
   };
 
@@ -274,6 +279,7 @@ function findFigureAnchors(lines) {
   return lines
     .filter((line) => {
       const t = line.text.toLowerCase();
+
       return (
         /^figure\s+\d+/i.test(line.text) ||
         /^table\s+\d+/i.test(line.text) ||
@@ -281,9 +287,13 @@ function findFigureAnchors(lines) {
         t.includes("revenue breakdown") ||
         t.includes("cost breakdown") ||
         t.includes("income statement") ||
+        t.includes("balance sheet") ||
         t.includes("cash flow") ||
         t.includes("key ratios") ||
-        t.includes("valuation")
+        t.includes("valuation") ||
+        t.includes("routes") ||
+        t.includes("fleet") ||
+        t.includes("spot exposure")
       );
     })
     .map((line) => ({
@@ -300,10 +310,10 @@ function chooseCropBox(pageMeta, pageWidth, pageHeight) {
     const topAnchor = anchors[0];
     const nextAnchor = anchors[1];
 
-    const top = clamp(topAnchor.y - 20, 0, pageHeight - 200);
+    const top = clamp(topAnchor.y - 30, 0, pageHeight - 220);
     const bottom = nextAnchor
-      ? clamp(nextAnchor.y - 20, top + 180, pageHeight - 10)
-      : clamp(top + pageHeight * 0.38, top + 180, pageHeight - 10);
+      ? clamp(nextAnchor.y - 20, top + 220, pageHeight - 10)
+      : clamp(top + pageHeight * 0.42, top + 220, pageHeight - 10);
 
     return {
       x: 20,
@@ -313,24 +323,23 @@ function chooseCropBox(pageMeta, pageWidth, pageHeight) {
     };
   }
 
-  // fallback by category
   const category = getBestCategory(pageMeta.matchedGroups);
 
   if (category === "forecast" || category === "revenue" || category === "valuation") {
     return {
       x: 20,
-      y: pageHeight * 0.28,
+      y: pageHeight * 0.25,
       width: pageWidth - 40,
-      height: pageHeight * 0.42,
+      height: pageHeight * 0.45,
     };
   }
 
   if (category === "business" || category === "market" || category === "lng") {
     return {
       x: 20,
-      y: pageHeight * 0.18,
+      y: pageHeight * 0.15,
       width: pageWidth - 40,
-      height: pageHeight * 0.45,
+      height: pageHeight * 0.50,
     };
   }
 
@@ -338,7 +347,7 @@ function chooseCropBox(pageMeta, pageWidth, pageHeight) {
     x: 20,
     y: pageHeight * 0.22,
     width: pageWidth - 40,
-    height: pageHeight * 0.42,
+    height: pageHeight * 0.45,
   };
 }
 
@@ -391,7 +400,7 @@ async function uploadBufferToCloudinary(buffer, { publicId, folder, fileName }) 
 
   if (publicId) form.append("public_id", publicId);
 
-  const res = await fetch(
+  const cloudinaryRes = await fetch(
     `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
     {
       method: "POST",
@@ -399,9 +408,9 @@ async function uploadBufferToCloudinary(buffer, { publicId, folder, fileName }) 
     }
   );
 
-  const data = await res.json();
+  const data = await cloudinaryRes.json();
 
-  if (!res.ok) {
+  if (!cloudinaryRes.ok) {
     throw new Error(`Cloudinary upload failed: ${JSON.stringify(data)}`);
   }
 
@@ -420,7 +429,7 @@ async function notionFetch(path, options = {}) {
   const token = process.env.NOTION_TOKEN;
   if (!token) throw new Error("Missing NOTION_TOKEN");
 
-  const res = await fetch(`https://api.notion.com/v1${path}`, {
+  const notionRes = await fetch(`https://api.notion.com/v1${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -430,9 +439,9 @@ async function notionFetch(path, options = {}) {
     },
   });
 
-  const data = await res.json();
+  const data = await notionRes.json();
 
-  if (!res.ok) {
+  if (!notionRes.ok) {
     throw new Error(`Notion API error: ${JSON.stringify(data)}`);
   }
 
@@ -440,10 +449,14 @@ async function notionFetch(path, options = {}) {
 }
 
 function getNotionPageTitle(page) {
-  const titleProp = page?.properties?.title?.title;
-  if (Array.isArray(titleProp) && titleProp.length > 0) {
-    return titleProp.map((t) => t.plain_text).join("").trim();
+  const props = page?.properties || {};
+
+  for (const value of Object.values(props)) {
+    if (value?.type === "title" && Array.isArray(value.title)) {
+      return value.title.map((t) => t.plain_text).join("").trim();
+    }
   }
+
   return "";
 }
 
@@ -465,7 +478,9 @@ async function searchCompanyPage({ ticker, companyName }) {
     const pages = data.results || [];
 
     if (ticker) {
-      const exactTicker = pages.find((p) => getNotionPageTitle(p).toUpperCase() === ticker.toUpperCase());
+      const exactTicker = pages.find(
+        (p) => getNotionPageTitle(p).toUpperCase() === ticker.toUpperCase()
+      );
       if (exactTicker) return exactTicker;
     }
 
@@ -485,6 +500,7 @@ async function searchCompanyPage({ ticker, companyName }) {
 
 async function createCompanyPage({ ticker, companyName }) {
   const rootPageId = process.env.NOTION_COMPANY_ROOT_PAGE_ID;
+
   if (!rootPageId) {
     throw new Error("Missing NOTION_COMPANY_ROOT_PAGE_ID for auto-create company page");
   }
@@ -509,20 +525,6 @@ async function createCompanyPage({ ticker, companyName }) {
         ],
       },
       children: [
-        {
-          object: "block",
-          type: "heading_1",
-          heading_1: {
-            rich_text: [
-              {
-                type: "text",
-                text: {
-                  content: title,
-                },
-              },
-            ],
-          },
-        },
         {
           object: "block",
           type: "paragraph",
@@ -555,6 +557,7 @@ async function findOrCreateCompanyPage({ ticker, companyName, explicitParentPage
   }
 
   const found = await searchCompanyPage({ ticker, companyName });
+
   if (found) {
     return {
       id: found.id,
@@ -565,6 +568,7 @@ async function findOrCreateCompanyPage({ ticker, companyName, explicitParentPage
   }
 
   const created = await createCompanyPage({ ticker, companyName });
+
   return {
     id: created.id,
     url: created.url,
@@ -575,6 +579,7 @@ async function findOrCreateCompanyPage({ ticker, companyName, explicitParentPage
 
 function richText(text) {
   if (!text) return [];
+
   return [
     {
       type: "text",
@@ -587,6 +592,7 @@ function richText(text) {
 
 function headingBlock(text, level = 2) {
   const type = level === 1 ? "heading_1" : level === 3 ? "heading_3" : "heading_2";
+
   return {
     object: "block",
     type,
@@ -638,9 +644,11 @@ function imageBlock(url, caption) {
 
 function chunkArray(arr, size) {
   const out = [];
+
   for (let i = 0; i < arr.length; i += size) {
     out.push(arr.slice(i, i + size));
   }
+
   return out;
 }
 
@@ -654,7 +662,7 @@ function buildExecutiveSummary({ ticker, companyName, rating, targetPrice, upsid
   if (upside) bits.push(`Potential upside: ${upside}%.`);
 
   bits.push(
-    "This page was generated automatically from the uploaded PDF using a heuristic summary and selected thesis-relevant visuals."
+    "This page was generated automatically from the uploaded PDF using heuristic extraction and selected thesis-relevant visuals."
   );
 
   return bits.join(" ");
@@ -663,7 +671,7 @@ function buildExecutiveSummary({ ticker, companyName, rating, targetPrice, upsid
 function buildThesisPoints(selectedPages) {
   return selectedPages.map((p) => ({
     title: chooseCaption(p),
-    description: cleanText(p.pageText).slice(0, 500),
+    description: cleanText(p.pageText).slice(0, 700),
     impact: chooseThesisImpact(p),
   }));
 }
@@ -683,21 +691,25 @@ function extractKeyNumbers(firstPageText) {
     "Potential Upside",
     "EV/EBITDA",
     "P/E",
+    "P/BV",
+    "ROAE",
+    "Net Gearing",
   ];
 
   const out = [];
 
   for (const target of targets) {
     const line = lines.find((l) => l.toLowerCase().includes(target.toLowerCase()));
+
     if (line) {
       out.push({
         metric: target,
-        value: line.slice(0, 180),
+        value: line.slice(0, 220),
       });
     }
   }
 
-  return out.slice(0, 10);
+  return out.slice(0, 12);
 }
 
 function buildThesisChangeLog(selectedPages) {
@@ -712,16 +724,28 @@ function buildWatchlist(selectedPages) {
   const items = new Set();
 
   for (const p of selectedPages) {
-    if (p.matchedGroups.includes("risk")) items.add("Monitor risk and sensitivity factors highlighted in the report.");
-    if (p.matchedGroups.includes("forecast")) items.add("Monitor execution against forecast assumptions and balance sheet outlook.");
-    if (p.matchedGroups.includes("valuation")) items.add("Monitor whether valuation upside is supported by realized performance.");
-    if (p.matchedGroups.includes("revenue")) items.add("Monitor revenue mix, margins, and cost sensitivity.");
-    if (p.matchedGroups.includes("lng")) items.add("Monitor execution of LNG-related expansion or contracts.");
-    if (p.matchedGroups.includes("market")) items.add("Monitor market / cyclical indicators that drive earnings leverage.");
+    if (p.matchedGroups.includes("risk")) {
+      items.add("Monitor risk and sensitivity factors highlighted in the report.");
+    }
+    if (p.matchedGroups.includes("forecast")) {
+      items.add("Monitor execution against forecast assumptions and balance sheet outlook.");
+    }
+    if (p.matchedGroups.includes("valuation")) {
+      items.add("Monitor whether valuation upside is supported by realized performance.");
+    }
+    if (p.matchedGroups.includes("revenue")) {
+      items.add("Monitor revenue mix, margins, and cost sensitivity.");
+    }
+    if (p.matchedGroups.includes("lng")) {
+      items.add("Monitor LNG-related expansion, vessel acquisition, and contract execution.");
+    }
+    if (p.matchedGroups.includes("market")) {
+      items.add("Monitor market or cyclical indicators that drive earnings leverage.");
+    }
   }
 
   if (items.size === 0) {
-    items.add("Monitor any thesis-changing updates from future company disclosures.");
+    items.add("Monitor thesis-changing updates from future company disclosures.");
   }
 
   return Array.from(items);
@@ -741,7 +765,6 @@ async function createNotionReportPage({
 }) {
   const blocks = [];
 
-  blocks.push(headingBlock(title, 1));
   blocks.push(paragraphBlock(`Source: ${sourceFile}`));
   blocks.push(dividerBlock());
 
@@ -750,6 +773,7 @@ async function createNotionReportPage({
 
   if (thesisPoints?.length) {
     blocks.push(headingBlock("Investment Thesis", 2));
+
     for (const item of thesisPoints) {
       blocks.push(headingBlock(item.title, 3));
       blocks.push(paragraphBlock(item.description));
@@ -759,6 +783,7 @@ async function createNotionReportPage({
 
   if (keyVisuals?.length) {
     blocks.push(headingBlock("Key Visuals", 2));
+
     for (const visual of keyVisuals) {
       blocks.push(headingBlock(`Page ${visual.page_number} — ${visual.caption}`, 3));
       blocks.push(imageBlock(visual.secure_url, visual.caption));
@@ -768,6 +793,7 @@ async function createNotionReportPage({
 
   if (keyNumbers?.length) {
     blocks.push(headingBlock("Key Numbers", 2));
+
     for (const row of keyNumbers) {
       blocks.push(bulletBlock(`${row.metric}: ${row.value}`));
     }
@@ -775,17 +801,17 @@ async function createNotionReportPage({
 
   if (thesisChangeLog?.length) {
     blocks.push(headingBlock("Thesis Change Log", 2));
+
     for (const row of thesisChangeLog) {
       blocks.push(
-        bulletBlock(
-          `Source page ${row.source_page}: ${row.update} | Impact: ${row.impact}`
-        )
+        bulletBlock(`Source page ${row.source_page}: ${row.update} | Impact: ${row.impact}`)
       );
     }
   }
 
   if (watchlist?.length) {
     blocks.push(headingBlock("Watchlist / Risks", 2));
+
     for (const item of watchlist) {
       blocks.push(bulletBlock(item));
     }
@@ -834,6 +860,78 @@ async function createNotionReportPage({
   return page;
 }
 
+function decodeBase64Pdf({ base64, mime_type }) {
+  if (mime_type && mime_type !== "application/pdf") {
+    throw new Error("Invalid mime_type. Expected application/pdf.");
+  }
+
+  if (!base64) {
+    throw new Error("Missing base64 field.");
+  }
+
+  let cleanBase64 = String(base64).trim();
+
+  if (cleanBase64.startsWith("data:")) {
+    const commaIndex = cleanBase64.indexOf(",");
+
+    if (commaIndex !== -1) {
+      cleanBase64 = cleanBase64.slice(commaIndex + 1);
+    }
+  }
+
+  cleanBase64 = cleanBase64.replace(/\s/g, "");
+
+  const pdfBuffer = Buffer.from(cleanBase64, "base64");
+
+  if (!pdfBuffer || pdfBuffer.length < 100) {
+    throw new Error("Decoded PDF buffer is too small. Base64 may be invalid.");
+  }
+
+  const header = pdfBuffer.subarray(0, 4).toString();
+
+  if (header !== "%PDF") {
+    throw new Error(`Decoded file is not a valid PDF. Header: ${header}`);
+  }
+
+  return pdfBuffer;
+}
+
+async function readRequestPayload(req) {
+  const contentType = req.headers["content-type"] || "";
+
+  if (contentType.includes("application/json")) {
+    const body = req.body || {};
+
+    return {
+      fields: {
+        parent_page_id: body.parent_page_id,
+        title: body.title,
+        max_visuals: body.max_visuals,
+        folder: body.folder,
+      },
+      originalFileName: body.filename || "uploaded-report.pdf",
+      pdfBuffer: decodeBase64Pdf({
+        base64: body.base64,
+        mime_type: body.mime_type,
+      }),
+    };
+  }
+
+  const parsed = await parseForm(req);
+  const rawFile = parsed.files.file;
+  const pdfFile = Array.isArray(rawFile) ? rawFile[0] : rawFile;
+
+  if (!pdfFile) {
+    throw new Error("Missing file field");
+  }
+
+  return {
+    fields: parsed.fields,
+    originalFileName: pdfFile.originalFilename || "uploaded-report.pdf",
+    pdfBuffer: fs.readFileSync(pdfFile.filepath),
+  };
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
@@ -850,29 +948,17 @@ export default async function handler(req, res) {
       });
     }
 
-    const { fields, files } = await parseForm(req);
-
-    const rawFile = files.file;
-    const pdfFile = Array.isArray(rawFile) ? rawFile[0] : rawFile;
-
-    if (!pdfFile) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing file field",
-      });
-    }
+    const { fields, originalFileName, pdfBuffer } = await readRequestPayload(req);
 
     const explicitParentPageId = getFieldValue(fields.parent_page_id, null);
     const explicitTitle = getFieldValue(fields.title, null);
     const maxVisuals = Number(getFieldValue(fields.max_visuals, 6)) || 6;
     const folder = getFieldValue(fields.folder, "notion-pdf-crops");
 
-    const originalFileName = pdfFile.originalFilename || "uploaded-report.pdf";
-    const pdfBuffer = fs.readFileSync(pdfFile.filepath);
-
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(pdfBuffer),
       useSystemFonts: true,
+      disableFontFace: true,
     });
 
     const pdfDocument = await loadingTask.promise;
@@ -885,7 +971,6 @@ export default async function handler(req, res) {
       const viewport = page.getViewport({ scale: 1 });
       const textContent = await page.getTextContent();
       const { lines, pageText } = buildPageTextAndLines(textContent, viewport);
-
       const { score, matchedGroups } = scorePageText(pageText);
 
       pageMetas.push({
@@ -911,11 +996,13 @@ export default async function handler(req, res) {
     });
 
     const selectedPages = selectRelevantPages(pageMetas, maxVisuals);
-
     const uploadedVisuals = [];
 
     for (const pageMeta of selectedPages) {
-      const cropBox = chooseCropBox(pageMeta, pageMeta.width * 2, pageMeta.height * 2);
+      const scaledWidth = pageMeta.width * 2;
+      const scaledHeight = pageMeta.height * 2;
+      const cropBox = chooseCropBox(pageMeta, scaledWidth, scaledHeight);
+
       const pngBuffer = await renderCroppedPageBuffer(
         pdfDocument,
         pageMeta.pageNumber,
@@ -924,6 +1011,7 @@ export default async function handler(req, res) {
       );
 
       const shortDesc = getBestCategory(pageMeta.matchedGroups);
+
       const publicId = `${(ticker || companyName || "company")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "_")}_${documentType
@@ -944,9 +1032,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const reportTitle =
-      explicitTitle ||
-      `${ticker || companyName} — ${documentType}`;
+    const reportTitle = explicitTitle || `${ticker || companyName} — ${documentType}`;
 
     const executiveSummary = buildExecutiveSummary({
       ticker,
@@ -961,6 +1047,7 @@ export default async function handler(req, res) {
     const keyNumbers = extractKeyNumbers(firstPageText);
     const thesisChangeLog = buildThesisChangeLog(selectedPages);
     const watchlist = buildWatchlist(selectedPages);
+
     const conclusion =
       "This report page was auto-generated from the PDF. Review the embedded visuals and summary for thesis-relevant changes and follow-up analysis.";
 
