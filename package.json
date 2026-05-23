@@ -1,6 +1,7 @@
 {
   "type": "module",
   "dependencies": {
+    "formidable": "^3.5.2",
     "@notionhq/client": "^2.2.14"
   }
 }
