@@ -281,7 +281,12 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error: "FIND_OR_CREATE_COMPANY_PAGE_FAILED",
-      detail: error instanceof Error ? error.message : String(error),
+      message: error?.message || String(error),
+      name: error?.name,
+      code: error?.code,
+      status: error?.status,
+      body: error?.body,
+      stack: process.env.NODE_ENV === "development" ? error?.stack : undefined,
     });
   }
 }
